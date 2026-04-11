@@ -1,9 +1,5 @@
 import { NextResponse } from 'next/server';
-import { writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
-import { db } from '@/lib/db';
-import { students, certificates } from '@/lib/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { uploadToDriveAndSheet } from '@/lib/google-api';
 
 export async function POST(req: Request) {
   try {
@@ -14,74 +10,47 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'No se enviaron archivos' }, { status: 400 });
     }
 
-    const uploadDir = join(process.cwd(), 'public', 'certificates');
-    
-    // Ensure directory exists
-    try {
-      await mkdir(uploadDir, { recursive: true });
-    } catch (error) {
-      // Ignore if exists
-    }
-
     let processed = 0;
     let errors: string[] = [];
 
     for (const file of files) {
       try {
-        const buffer = Buffer.from(await file.arrayBuffer());
-        
-        // 1. Extract and clean cedula from filename
         const originalName = file.name.replace(/\.[^/.]+$/, "");
-        const cedula = originalName.replace(/[^a-zA-Z0-9]/g, '');
+        
+        // --- PARSER INTELIGENTE DE NOMBRE DE ARCHIVO ---
+        // Esperamos: CEDULA_CURSO_AÑO.pdf o simplemente CEDULA.pdf
+        // Usamos "_" como separador preferido, pero también "-" o " "
+        const parts = originalName.split(/[_\-]/);
+        
+        const cedula = parts[0]?.trim();
+        const courseName = parts[1]?.trim();
+        const graduationYear = parts[2]?.trim();
 
         if (!cedula) {
-          errors.push(`Nombre inválido (vacío después de limpiar): ${file.name}`);
+          errors.push(`Nombre inválido (faltan datos): ${file.name}`);
           continue;
         }
 
-        // 2. Find student by cedula
-        const student = await db.query.students.findFirst({
-           where: eq(students.cedula, cedula)
+        const buffer = Buffer.from(await file.arrayBuffer());
+        const base64 = buffer.toString('base64');
+
+        // Enviamos los metadatos para que Google Sheets haga el match inteligente
+        await uploadToDriveAndSheet(file.name, base64, {
+          cedula,
+          courseName,
+          graduationYear
         });
-
-        if (!student) {
-          errors.push(`Estudiante no encontrado para cédula: ${cedula}`);
-          continue;
-        }
-
-        // 3. Find pending certificate (certificatePath = '#')
-        const pendingCert = await db.query.certificates.findFirst({
-          where: and(
-            eq(certificates.studentId, student.id),
-            eq(certificates.certificatePath, '#')
-          )
-        });
-
-        if (!pendingCert) {
-          errors.push(`No hay certificados pendientes para ${student.firstName} ${student.lastName} (${cedula})`);
-          continue;
-        }
-
-        // 4. Save file with unique name (cert_id.pdf)
-        const safeName = `cert_${pendingCert.id}.pdf`;
-        const path = join(uploadDir, safeName);
-        await writeFile(path, buffer);
-
-        // 5. Update certificate record
-        await db.update(certificates)
-          .set({ certificatePath: `/certificates/${safeName}` })
-          .where(eq(certificates.id, pendingCert.id));
 
         processed++;
-      } catch (err) {
+      } catch (err: any) {
         console.error(err);
-        errors.push(`Error en ${file.name}`);
+        errors.push(`Error en ${file.name}: ${err.message || 'Error desconocido'}`);
       }
     }
 
     return NextResponse.json({ processed, errors });
   } catch (error) {
-    console.error(error);
+    console.error('Error in Bulk Upload:', error);
     return NextResponse.json({ error: 'Error del servidor' }, { status: 500 });
   }
 }

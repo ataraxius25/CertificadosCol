@@ -1,8 +1,6 @@
-import { db } from '@/lib/db';
-import { students, certificates } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import * as XLSX from 'xlsx';
+import { batchCreateStudentsInSheets } from '@/lib/google-api';
 
 export async function POST(req: Request) {
   try {
@@ -27,12 +25,13 @@ export async function POST(req: Request) {
 
     let synced = 0;
     let errors: { row: number, error: string, data: any }[] = [];
+    const recordsToSync: any[] = [];
 
-    // Expected columns: Tipo Documento, Documento, Nombres, Apellidos, Curso, Año
+    // Normalización de columnas y validación
     for (const [index, row] of rows.entries()) {
       let documentType = String(row['Tipo Documento'] || row['tipo_documento'] || row['TipoDocumento'] || row['TIPO_DOCUMENTO'] || 'CC').trim().toUpperCase();
       
-      // Normalize document type: accept both full text and abbreviations
+      // Normalización de tipo de documento
       if (documentType.includes('CIUDADAN') || documentType === 'CC') {
         documentType = 'CC';
       } else if (documentType.includes('EXTRANJER') || documentType === 'CE') {
@@ -41,10 +40,9 @@ export async function POST(req: Request) {
         documentType = 'PPT';
       } else if (documentType.includes('PASAPORTE') || documentType === 'PPN') {
         documentType = 'PPN';
-      } else if (!documentType || documentType === '') {
-        documentType = 'CC'; // Default
+      } else {
+        documentType = 'CC'; // Por defecto
       }
-      // If none match, keep original value (will be validated later if needed)
       
       const cedula = String(row['Documento'] || row['documento'] || row['CEDULA'] || row['cedula'] || '').trim();
       const firstName = (row['Nombres'] || row['nombres'] || row['NOMBRES'] || '').trim();
@@ -53,69 +51,31 @@ export async function POST(req: Request) {
       const courseName = (row['Curso'] || row['curso'] || row['CURSO'] || row['Programa'] || row['programa'] || '').trim();
       const year = row['Año'] || row['año'] || row['AÑO'] || row['Grado'] || row['grado'] || row['GRADO'] || row['Anio'] || row['año_graduacion'] || row['ano_graduacion'] || row['year'];
 
-      // Validate required fields (email is optional)
-      if (!documentType || !cedula || !firstName || !lastName || !courseName || !year) {
-        const missingFields = [];
-        if (!documentType) missingFields.push('Tipo Documento');
-        if (!cedula) missingFields.push('Documento');
-        if (!firstName) missingFields.push('Nombres');
-        if (!lastName) missingFields.push('Apellidos');
-        if (!courseName) missingFields.push('Curso');
-        if (!year) missingFields.push('Año');
-        
+      // Validación de campos obligatorios
+      if (!cedula || !firstName || !courseName || !year) {
         errors.push({ 
-          row: index + 2, // +2 because Excel starts at 1 and has header
-          error: `Faltan campos obligatorios: ${missingFields.join(', ')}`, 
+          row: index + 2, 
+          error: `Faltan campos obligatorios (Documento, Nombres, Curso o Año)`, 
           data: { documentType, cedula, firstName, lastName, email, courseName, year } 
         });
         continue;
       }
 
-      try {
-        // Step 1: Find or create student
-        let student = await db.query.students.findFirst({
-          where: eq(students.cedula, cedula)
-        });
+      recordsToSync.push({
+        documentType,
+        cedula,
+        firstName,
+        lastName,
+        email: email || null,
+        courseName,
+        graduationYear: year
+      });
+      synced++;
+    }
 
-        if (!student) {
-          // Create new student
-          const newStudent = await db.insert(students).values({
-            cedula,
-            documentType,
-            firstName,
-            lastName,
-            email: email || null,
-          }).returning();
-          student = newStudent[0];
-        } else {
-          // Update student info (in case names changed)
-          await db.update(students)
-            .set({ 
-              documentType,
-              firstName, 
-              lastName, 
-              email: email || student.email 
-            })
-            .where(eq(students.id, student.id));
-        }
-
-        // Step 2: Create certificate record
-        await db.insert(certificates).values({
-          studentId: student.id,
-          courseName,
-          certificatePath: '#', // Placeholder until PDF is uploaded
-          graduationYear: Number(year),
-        });
-
-        synced++;
-      } catch (err) {
-        console.error(err);
-        errors.push({ 
-          row: index + 2, 
-          error: 'Error de base de datos', 
-          data: { cedula, courseName } 
-        });
-      }
+    // Inserción masiva en Google Sheets
+    if (recordsToSync.length > 0) {
+      await batchCreateStudentsInSheets(recordsToSync);
     }
 
     return NextResponse.json({
@@ -124,8 +84,8 @@ export async function POST(req: Request) {
       errors
     });
 
-  } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: 'Error procesando el archivo' }, { status: 500 });
+  } catch (error: any) {
+    console.error('Error in Bulk Excel Sync:', error);
+    return NextResponse.json({ error: error.message || 'Error procesando el archivo' }, { status: 500 });
   }
 }

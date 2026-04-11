@@ -1,29 +1,27 @@
-import { db } from '@/lib/db';
-import { certificates } from '@/lib/db/schema';
-import { like, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { listAllStudents } from '@/lib/google-api';
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const query = searchParams.get('query') || '';
+  const query = (searchParams.get('query') || '').toLowerCase();
 
   try {
-    // SQLite distinct query using groupBy since distinct() might not be fully supported in all Drizzle drivers for SQLite as expected
-    // or just use groupBy which is standard.
-    // Using sql`distinct` inside select is also possible.
+    const allStudents = await listAllStudents();
     
-    // We want unique course names matching the query
-    const results = await db.select({
-      name: certificates.courseName, // We just need the name
-    })
-    .from(certificates)
-    .where(like(certificates.courseName, `%${query}%`))
-    .groupBy(certificates.courseName)
-    .limit(10); // Limit usage for autocomplete
+    // Extraer nombres de cursos únicos que coincidan con la búsqueda
+    const courseSet = new Set<string>();
+    
+    allStudents.forEach(st => {
+      (st.certificates || []).forEach((cert: { courseName: string }) => {
+        if (cert.courseName.toLowerCase().includes(query)) {
+          courseSet.add(cert.courseName);
+        }
+      });
+    });
 
-    return NextResponse.json(results.map(r => r.name));
+    return NextResponse.json(Array.from(courseSet).slice(0, 10));
   } catch (error) {
-    console.error(error);
-    return NextResponse.json([], { status: 500 });
+    console.error('Error fetching courses from Sheets:', error);
+    return NextResponse.json([]);
   }
 }

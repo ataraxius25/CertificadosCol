@@ -1,77 +1,59 @@
-import { db } from '@/lib/db';
-import { students, certificates } from '@/lib/db/schema';
-import { eq, sql, count } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { listAllStudents } from '@/lib/google-api';
+import { ReportData, SummaryStats, DocumentType } from '@/types';
 
 export async function GET() {
   try {
-    // 1. Total students
-    const totalStudents = await db.select({ count: count() }).from(students);
+    const data = await listAllStudents();
 
-    // 2. Total certificates
-    const totalCertificates = await db.select({ count: count() }).from(certificates);
+    const summary: SummaryStats = {
+      totalStudents: new Set(data.map(s => s.cedula)).size,
+      totalCertificates: data.length,
+      pendingCertificates: data.filter(c => c.certificatePath === '#').length,
+      completedCertificates: data.filter(c => c.certificatePath !== '#').length,
+    };
 
-    // 3. Pending certificates (certificatePath = '#')
-    const pendingCertificates = await db.select({ count: count() })
-      .from(certificates)
-      .where(eq(certificates.certificatePath, '#'));
+    // Certs by Year
+    const yearCounts: Record<number, number> = {};
+    data.forEach(c => {
+      const yr = Number(c.graduationYear);
+      if (yr) yearCounts[yr] = (yearCounts[yr] || 0) + 1;
+    });
+    const certsByYear = Object.entries(yearCounts).map(([year, count]) => ({
+      year: parseInt(year),
+      count
+    })).sort((a, b) => b.year - a.year);
 
-    // 4. Completed certificates
-    const completedCount = totalCertificates[0].count - pendingCertificates[0].count;
+    // Top Courses
+    const courseCounts: Record<string, number> = {};
+    data.forEach(c => {
+      if (c.courseName) courseCounts[c.courseName] = (courseCounts[c.courseName] || 0) + 1;
+    });
+    const topCourses = Object.entries(courseCounts)
+      .map(([courseName, count]) => ({ courseName, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
 
-    // 5. Certificates by year
-    const certsByYear = await db.select({
-      year: certificates.graduationYear,
-      count: count()
-    })
-    .from(certificates)
-    .groupBy(certificates.graduationYear)
-    .orderBy(certificates.graduationYear);
+    // Doc Types
+    const docCounts: Record<string, number> = {};
+    data.forEach(s => {
+      docCounts[s.documentType] = (docCounts[s.documentType] || 0) + 1;
+    });
+    const studentsByDocType = Object.entries(docCounts).map(([documentType, count]) => ({
+      documentType: documentType as DocumentType,
+      count
+    }));
 
-    // 6. Top courses
-    const topCourses = await db.select({
-      courseName: certificates.courseName,
-      count: count()
-    })
-    .from(certificates)
-    .groupBy(certificates.courseName)
-    .orderBy(sql`count(*) DESC`)
-    .limit(5);
-
-    // 7. Students by document type
-    const studentsByDocType = await db.select({
-      documentType: students.documentType,
-      count: count()
-    })
-    .from(students)
-    .groupBy(students.documentType);
-
-    // 8. Recent certificates (last 10)
-    const recentCertificates = await db.select({
-      id: certificates.id,
-      courseName: certificates.courseName,
-      graduationYear: certificates.graduationYear,
-      studentId: certificates.studentId,
-      createdAt: certificates.createdAt,
-    })
-    .from(certificates)
-    .orderBy(sql`${certificates.createdAt} DESC`)
-    .limit(10);
-
-    return NextResponse.json({
-      summary: {
-        totalStudents: totalStudents[0].count,
-        totalCertificates: totalCertificates[0].count,
-        pendingCertificates: pendingCertificates[0].count,
-        completedCertificates: completedCount,
-      },
+    const report: ReportData = {
+      summary,
       certsByYear,
       topCourses,
-      studentsByDocType,
-      recentCertificates,
-    });
+      studentsByDocType
+    };
+
+    return NextResponse.json(report);
   } catch (error) {
-    console.error('Error fetching reports:', error);
+    console.error('Error in reports:', error);
     return NextResponse.json({ error: 'Error al generar reportes' }, { status: 500 });
   }
 }

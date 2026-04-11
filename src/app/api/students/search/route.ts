@@ -1,32 +1,37 @@
-import { db } from '@/lib/db';
-import { students } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { searchStudentInGoogleSheets } from '@/lib/google-api';
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const cedula = searchParams.get('cedula');
   const documentType = searchParams.get('documentType');
 
-  if (!cedula) {
-    return NextResponse.json({ error: 'Cédula requerida' }, { status: 400 });
+  // Seguridad: Requerir ambos parámetros para evitar "fuga" de datos por fuerza bruta parcial
+  if (!cedula || !documentType) {
+    return NextResponse.json({ error: 'Identificación y tipo de documento son requeridos' }, { status: 400 });
   }
 
+  // Defensa: Retraso artificial para mitigar ataques de fuerza bruta (scraping)
+  await new Promise(resolve => setTimeout(resolve, 500));
+
   try {
-    const student = await db.query.students.findFirst({
-      where: (students, { eq, and }) => and(
-        eq(students.cedula, cedula),
-        documentType ? eq(students.documentType, documentType) : undefined
-      ),
-      with: { certificates: true },
-    });
+    const student = await searchStudentInGoogleSheets(cedula);
 
     if (!student) {
-      return NextResponse.json({ error: 'No encontrado' }, { status: 404 });
+      return NextResponse.json({ error: 'Registro no encontrado' }, { status: 404 });
+    }
+
+    // Validación extra: El tipo de documento debe coincidir estrictamente (normalizado)
+    const normalizedDbDocType = student.documentType?.toString().trim().toUpperCase();
+    const normalizedParamDocType = documentType.toString().trim().toUpperCase();
+
+    if (normalizedDbDocType !== normalizedParamDocType) {
+      return NextResponse.json({ error: 'Registro no encontrado' }, { status: 404 });
     }
 
     return NextResponse.json(student);
   } catch (error) {
-    return NextResponse.json({ error: 'Error del servidor' }, { status: 500 });
+    console.error('Error public search:', error);
+    return NextResponse.json({ error: 'Servicio no disponible' }, { status: 500 });
   }
 }

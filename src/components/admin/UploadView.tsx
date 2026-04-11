@@ -1,359 +1,264 @@
-import { useState, useRef } from 'react';
+import { useState, useCallback } from 'react';
+import { useDropzone } from 'react-dropzone';
 import { 
-  FileSpreadsheet, 
-  FileUp, 
-  Check, 
-  Database, 
-  ShieldCheck, 
+  UploadCloud, 
+  FileText, 
+  CheckCircle2, 
+  XCircle, 
   Loader2, 
-  AlertCircle 
+  ShieldCheck,
+  FileUp,
+  X,
+  Database,
+  FileBox,
+  AlertCircle,
+  FileSpreadsheet
 } from 'lucide-react';
 import { useToast } from '@/components/ui/ToastContext';
+import { downloadExcelTemplate } from '@/lib/utils/excel-helpers';
 
-export function UploadView() {
-  const { toast } = useToast();
-  const [syncStatus, setSyncStatus] = useState<{
-    totalStudents: number;
-    synced: number;
-    errors: { row: number; error: string; data: Record<string, unknown> }[];
-  } | null>(null);
-  const [pdfStatus, setPdfStatus] = useState<{
-    processed: number;
-    errors: string[];
-  } | null>(null);
+interface UploadingFile {
+  file: File;
+  status: 'pending' | 'uploading' | 'success' | 'error';
+  error?: string;
+}
 
+interface UploadViewProps {
+  refreshData: (silent?: boolean) => Promise<void>;
+}
+
+export function UploadView({ refreshData }: UploadViewProps) {
+  const [activeTab, setActiveTab] = useState<'database' | 'certificates'>('database');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [selectedPdfFiles, setSelectedPdfFiles] = useState<FileList | null>(null);
+  const [dbFile, setDbFile] = useState<File | null>(null);
+  const [pdfFiles, setPdfFiles] = useState<UploadingFile[]>([]);
+  const { toast } = useToast();
 
-  const excelInputRef = useRef<HTMLInputElement>(null);
-  const pdfInputRef = useRef<HTMLInputElement>(null);
+  // --- LÓGICA DE CARGA DE BASE DE DATOS (EXCEL) ---
+  const onDropDB = useCallback((acceptedFiles: File[]) => {
+    if (acceptedFiles.length > 0) setDbFile(acceptedFiles[0]);
+  }, []);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setSelectedFile(e.target.files[0]);
-      setSelectedPdfFiles(null);
-      setSyncStatus(null);
-      setPdfStatus(null);
-      if (pdfInputRef.current) pdfInputRef.current.value = '';
+  const { getRootProps: getRootDB, getInputProps: getInputDB, isDragActive: isDragDB } = useDropzone({
+    onDrop: onDropDB,
+    multiple: false,
+    accept: {
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+      'application/vnd.ms-excel': ['.xls'],
+      'text/csv': ['.csv']
+    }
+  });
+
+  const handleDBUpload = async () => {
+    if (!dbFile) return;
+    setIsProcessing(true);
+    const formData = new FormData();
+    formData.append('file', dbFile);
+
+    try {
+      const res = await fetch('/api/admin/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      const result = await res.json();
+      if (res.ok) {
+        toast(`¡Éxito! ${result.synced} de ${result.total} registros sincronizados.`, 'success');
+        setDbFile(null);
+        refreshData(true);
+      } else {
+        toast(result.error || 'Error al procesar el Excel', 'error');
+      }
+    } catch (error) {
+      toast('Error de conexión', 'error');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
-  const handlePdfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      setSelectedPdfFiles(e.target.files);
-      setSelectedFile(null);
-      setPdfStatus(null);
-      setSyncStatus(null);
-      if (excelInputRef.current) excelInputRef.current.value = '';
-    }
-  };
+  // --- LÓGICA DE CARGA DE CERTIFICADOS (PDF) ---
+  const onDropPDF = useCallback((acceptedFiles: File[]) => {
+    const newFiles = acceptedFiles.map(file => ({ file, status: 'pending' as const }));
+    setPdfFiles(prev => [...prev, ...newFiles]);
+  }, []);
 
-  const handleProcess = async () => {
-    if (!selectedFile && !selectedPdfFiles) {
-      toast('Seleccione un archivo Excel o Certificados PDF.', 'error');
-      return;
-    }
+  const { getRootProps: getRootPDF, getInputProps: getInputPDF, isDragActive: isDragPDF } = useDropzone({
+    onDrop: onDropPDF,
+    accept: { 'application/pdf': ['.pdf'] }
+  });
+
+  const uploadPDFFiles = async () => {
+    if (pdfFiles.length === 0) return;
+    const pending = pdfFiles.filter(f => f.status === 'pending');
+    if (pending.length === 0) return;
 
     setIsProcessing(true);
-    setSyncStatus(null);
-    setPdfStatus(null);
 
-    // --- EXCEL UPLOAD ---
-    if (selectedFile) {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
+    // PASO 1: Marcar todos como "subiendo"
+    setPdfFiles(prev => prev.map(f => f.status === 'pending' ? { ...f, status: 'uploading' } : f));
 
-      try {
-        const res = await fetch('/api/admin/upload', {
-          method: 'POST',
-          body: formData,
+    try {
+      // PASO 2: Convertir TODOS los archivos a base64 localmente (sin llamadas a la API)
+      const filesData: { fileName: string; fileBase64: string }[] = [];
+
+      for (const item of pending) {
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve((reader.result as string).split(',')[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(item.file);
         });
-
-        if (res.ok) {
-          const data = await res.json();
-          setSyncStatus({
-            totalStudents: data.total,
-            synced: data.synced,
-            errors: data.errors
-          });
-          if (data.synced > 0) toast(`Se importaron ${data.synced} estudiantes correctamente.`, 'success');
-          
-          setSelectedFile(null);
-          if (excelInputRef.current) excelInputRef.current.value = '';
-          
-        } else {
-          const err = await res.json();
-          toast(err.error || 'Error en la carga de Excel', 'error');
-        }
-      } catch (error) {
-        toast('Error de conexión enviando Excel', 'error');
-      }
-    } 
-    
-    // --- PDF UPLOAD ---
-    else if (selectedPdfFiles) {
-      const formData = new FormData();
-      for (let i = 0; i < selectedPdfFiles.length; i++) {
-        formData.append('files', selectedPdfFiles[i]);
+        filesData.push({ fileName: item.file.name, fileBase64: base64 });
       }
 
-      try {
-        const res = await fetch('/api/admin/upload-pdf', {
-          method: 'POST',
-          body: formData,
-        });
+      // PASO 3: UNA SOLA llamada a la API con TODOS los archivos
+      const res = await fetch('/api/admin/certificates/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'BATCH_UPLOAD', files: filesData }),
+      });
 
-        if (res.ok) {
-          const data = await res.json();
-          setPdfStatus({
-            processed: data.processed,
-            errors: data.errors
-          });
-          toast(`Proceso finalizado: ${data.processed} certificados subidos.`, 'success');
+      const resData = await res.json().catch(() => ({}));
 
-          setSelectedPdfFiles(null);
-          if (pdfInputRef.current) pdfInputRef.current.value = '';
-
-        } else {
-          const err = await res.json();
-          toast(err.error || 'Error subiendo PDFs', 'error');
-        }
-      } catch (error) {
-        toast('Error de conexión subiendo PDFs', 'error');
+      if (res.ok || resData.success) {
+        // Marcar todos como éxito
+        setPdfFiles(prev => prev.map(f => f.status === 'uploading' ? { ...f, status: 'success' } : f));
+        toast(`${filesData.length} archivos subidos en una sola operación`, 'success');
+        refreshData(true);
+      } else {
+        setPdfFiles(prev => prev.map(f => f.status === 'uploading' ? { ...f, status: 'error', error: resData.error || 'Error' } : f));
+        toast('Error al procesar el lote', 'error');
       }
+    } catch {
+      setPdfFiles(prev => prev.map(f => f.status === 'uploading' ? { ...f, status: 'error', error: 'Error de red' } : f));
+      toast('Error de conexión', 'error');
     }
 
     setIsProcessing(false);
+
+    // Limpiar la cola automáticamente después de 3 segundos
+    setTimeout(() => {
+      setPdfFiles([]);
+    }, 3000);
   };
 
   return (
-    <div className="space-y-6 md:space-y-8 animate-in fade-in duration-500">
-      {/* Excel & Template Header */}
-      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6 bg-white p-6 md:p-8 rounded-[2rem] border border-gray-100 shadow-sm">
-        <div className="hidden lg:block">
-          <h4 className="text-xl font-black text-gray-900">Preparación de Datos</h4>
-          <p className="text-sm text-gray-500 font-medium">Use nuestra plantilla oficial con columna de Tipo Documento (CC, CE, PPT, PPN).</p>
-        </div>
-        <a 
-          href="/template.xlsx" 
-          download
-          style={{ backgroundColor: '#3B82F6' }}
-          className="w-full lg:w-auto flex items-center justify-center gap-3 px-8 py-4 text-white rounded-2xl font-black text-xs md:text-sm hover:bg-blue-700 active:scale-95 transition-all shadow-xl shadow-blue-200 uppercase tracking-widest no-underline"
-        >
-          <FileSpreadsheet size={18} className="text-white" />
-          <span className="text-white">DESCARGAR PLANTILLA</span>
-        </a>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-8">
-        {/* Excel Upload */}
-        <div className={`bg-white p-6 md:p-8 rounded-[2rem] border transition-all space-y-6 shadow-sm ${selectedFile ? 'border-green-500 ring-2 ring-green-100' : 'border-gray-100'}`}>
-          <div className="flex items-center gap-4 mb-2">
-            <div className="w-10 h-10 md:w-12 md:h-12 bg-green-50 rounded-2xl flex items-center justify-center">
-              <FileSpreadsheet className="text-green-600 w-5 h-5 md:w-6 md:h-6" />
-            </div>
-            <div>
-              <h4 className="text-base md:text-lg font-black text-gray-900">Datos (.xlsx)</h4>
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Paso 1: Lista de alumnos</p>
-            </div>
-          </div>
-          
-          <label className="block w-full border-2 border-dashed border-gray-100 rounded-[2rem] p-8 md:p-12 text-center cursor-pointer hover:bg-green-50/30 hover:border-green-100 transition-all relative">
-            <input 
-              ref={excelInputRef}
-              type="file" 
-              className="hidden" 
-              accept=".xlsx, .xls" 
-              onChange={handleFileChange} 
-            />
-            {selectedFile ? (
-              <div className="animate-in fade-in zoom-in">
-                <Check className="w-10 h-10 md:w-12 md:h-12 text-green-500 mx-auto mb-4" />
-                <p className="text-sm font-bold text-gray-900">{selectedFile.name}</p>
-                <p className="text-[10px] md:text-xs text-green-600 font-bold mt-1">Listo para subir</p>
-              </div>
-            ) : (
-              <>
-                <FileUp className="w-10 h-10 md:w-12 md:h-12 text-gray-200 mx-auto mb-4" />
-                <p className="text-sm font-bold text-gray-900">Subir .xlsx</p>
-                <p className="text-[10px] md:text-xs text-gray-400 font-medium mt-1">Arrastre o haga clic</p>
-              </>
-            )}
-          </label>
-        </div>
-
-        {/* PDF Upload */}
-        <div className={`bg-white p-6 md:p-8 rounded-[2rem] border transition-all space-y-6 shadow-sm ${selectedPdfFiles ? 'border-orange-500 ring-2 ring-orange-100' : 'border-gray-100'}`}>
-          <div className="flex items-center gap-4 mb-2">
-            <div className="w-10 h-10 md:w-12 md:h-12 bg-orange-50 rounded-2xl flex items-center justify-center">
-              <FileUp className="text-orange-600 w-5 h-5 md:w-6 md:h-6" />
-            </div>
-            <div>
-              <h4 className="text-base md:text-lg font-black text-gray-900">Certificados (.pdf)</h4>
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Paso 2: Carga masiva PDF</p>
-            </div>
-          </div>
-          
-          <label className="block w-full border-2 border-dashed border-gray-100 rounded-[2rem] p-8 md:p-12 text-center cursor-pointer hover:bg-orange-50/30 hover:border-orange-100 transition-all relative">
-            <input 
-              ref={pdfInputRef}
-              type="file" 
-              className="hidden" 
-              multiple 
-              accept=".pdf" 
-              onChange={handlePdfChange} 
-            />
-            {selectedPdfFiles && selectedPdfFiles.length > 0 ? (
-              <div className="animate-in fade-in zoom-in">
-                <Check className="w-10 h-10 md:w-12 md:h-12 text-orange-500 mx-auto mb-4" />
-                <p className="text-sm font-bold text-gray-900">{selectedPdfFiles.length} Archivos</p>
-                <p className="text-[10px] md:text-xs text-orange-600 font-bold mt-1">Listos para subir</p>
-              </div>
-            ) : (
-              <>
-                <Database className="w-10 h-10 md:w-12 md:h-12 text-gray-200 mx-auto mb-4" />
-                <p className="text-sm font-bold text-gray-900">Subir PDF(s)</p>
-                <p className="text-[10px] md:text-xs text-gray-400 font-medium mt-1">Seleccione uno o varios</p>
-              </>
-            )}
-          </label>
-        </div>
-      </div>
-
-      {/* Process Button */}
-      <div className="flex justify-center py-4">
+    <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500 text-black">
+      {/* Tabs Professional Switch */}
+      <div className="flex bg-gray-100 p-1.5 rounded-[2rem] w-full max-w-md mx-auto">
         <button 
-          onClick={handleProcess}
-          disabled={isProcessing || (!selectedFile && !selectedPdfFiles)}
-          className="w-full md:w-auto px-12 py-5 bg-blue-600 text-white rounded-2xl font-black text-base md:text-lg shadow-xl shadow-blue-100 hover:bg-blue-700 active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:grayscale"
+          onClick={() => setActiveTab('database')}
+          className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-[1.5rem] font-black text-xs uppercase tracking-widest transition-all ${activeTab === 'database' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
         >
-          {isProcessing ? (
-            <>
-              <Loader2 className="animate-spin" size={24} />
-              PROCESANDO...
-            </>
-          ) : (
-            <>
-              <ShieldCheck size={24} />
-              {selectedPdfFiles ? 'SUBIR CERTIFICADOS' : 'IMPORTAR ESTUDIANTES'}
-            </>
-          )}
+          <Database size={16} /> Base de Datos
+        </button>
+        <button 
+          onClick={() => setActiveTab('certificates')}
+          className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-[1.5rem] font-black text-xs uppercase tracking-widest transition-all ${activeTab === 'certificates' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+        >
+          <FileBox size={16} /> Archivos PDF
         </button>
       </div>
 
-      {/* Excel Results */}
-      {syncStatus && (
-        <div className="bg-white rounded-[2.5rem] border border-gray-100 overflow-hidden shadow-2xl animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <div className="bg-gray-900 p-6 md:p-8 text-white flex flex-col md:flex-row justify-between items-center gap-6">
-            <div className="flex items-center gap-4 text-center md:text-left">
-              <div className="w-14 h-14 bg-green-500 rounded-full flex items-center justify-center font-black text-xl shrink-0">
-                 {syncStatus.totalStudents > 0 ? Math.round((syncStatus.synced / syncStatus.totalStudents) * 100) : 0}%
-              </div>
-              <div>
-                <h5 className="text-lg md:text-xl font-black tracking-tight">Reporte de Carga Excel</h5>
-                <p className="text-green-300 text-[10px] md:text-xs font-bold uppercase tracking-widest">Proceso completado</p>
-              </div>
+      {activeTab === 'database' ? (
+        <div className="space-y-8">
+          <div className="bg-white p-8 md:p-12 rounded-[3rem] border border-gray-100 shadow-sm flex flex-col md:flex-row items-center gap-8">
+            <div className="size-20 bg-blue-50 rounded-3xl flex items-center justify-center text-blue-600 shrink-0">
+              <Database size={40} />
             </div>
-            
-            <div className="flex gap-3 w-full md:w-auto">
-               <div className="flex-1 md:flex-none bg-white/10 px-4 md:px-6 py-3 rounded-2xl backdrop-blur-md">
-                 <p className="text-[8px] font-black text-blue-200 uppercase tracking-widest mb-1">Total Filas</p>
-                 <p className="text-base font-black">{syncStatus.totalStudents}</p>
-               </div>
-               <div className="flex-1 md:flex-none bg-green-500/20 px-4 md:px-6 py-3 rounded-2xl backdrop-blur-md border border-green-500/30">
-                 <p className="text-[8px] font-black text-green-200 uppercase tracking-widest mb-1">Cargados</p>
-                 <p className="text-base font-black">{syncStatus.synced}</p>
-               </div>
+            <div>
+              <h2 className="text-3xl font-black text-gray-900 leading-tight">Cargar Registros de Estudiantes</h2>
+              <p className="text-gray-500 font-medium mt-2">Importa tu archivo Excel (.xlsx) para crear o actualizar el registro de graduados en el sistema.</p>
             </div>
           </div>
 
-          <div className="p-6 md:p-8 space-y-6">
-            {syncStatus.errors.length > 0 && (
-              <div className="space-y-4">
-                <div className="flex items-center gap-2 text-red-600">
-                  <AlertCircle size={18} />
-                  <h6 className="font-black uppercase tracking-widest text-[10px]">Errores Detectados:</h6>
-                </div>
-                <div className="bg-red-50 rounded-xl border border-red-100 overflow-hidden">
-                   <div className="max-h-60 overflow-y-auto">
-                     <table className="w-full text-left border-collapse">
-                       <thead className="bg-red-100/50 text-[10px] uppercase tracking-widest text-red-800 font-bold sticky top-0">
-                         <tr>
-                           <th className="p-3">Fila</th>
-                           <th className="p-3">Error</th>
-                           <th className="p-3">Datos Recibidos</th>
-                         </tr>
-                       </thead>
-                       <tbody className="divide-y divide-red-100">
-                         {syncStatus.errors.map((item, i) => (
-                           <tr key={i} className="hover:bg-red-100/30 transition-colors">
-                             <td className="p-3 align-top">
-                               <span className="inline-flex items-center justify-center px-2 py-1 bg-white border border-red-200 rounded-md text-xs font-black text-red-700">
-                                 #{item.row}
-                               </span>
-                             </td>
-                             <td className="p-3 align-top text-xs font-bold text-red-700 min-w-[150px]">
-                               {item.error}
-                             </td>
-                             <td className="p-3 align-top">
-                               <code className="block text-[10px] bg-white p-2 rounded border border-red-100 text-red-600 font-mono break-all leading-relaxed whitespace-pre-wrap">
-                                 {JSON.stringify(item.data, null, 2)}
-                               </code>
-                             </td>
-                           </tr>
-                         ))}
-                       </tbody>
-                     </table>
-                   </div>
-                </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div {...getRootDB()} className={`relative h-80 rounded-[2.5rem] border-4 border-dashed transition-all cursor-pointer flex flex-col items-center justify-center p-8 text-center ${isDragDB ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white hover:bg-gray-50'}`}>
+              <input {...getInputDB()} />
+              <div className="size-16 bg-blue-600 rounded-2xl flex items-center justify-center text-white mb-6 shadow-lg shadow-blue-100">
+                 <FileUp size={32} />
               </div>
-            )}
-             {syncStatus && syncStatus.errors.length === 0 && (
-                <div className="text-center text-green-600 font-bold p-4 bg-green-50 rounded-xl">
-                   ¡Carga exitosa sin errores!
-                </div>
-             )}
+              <p className="text-lg font-black text-gray-900 leading-tight">{dbFile ? dbFile.name : 'Arrastra tu Excel aquí'}</p>
+              <p className="text-xs text-gray-400 font-bold mt-2 uppercase tracking-widest">Formatos admitidos: .xlsx, .xls, .csv</p>
+            </div>
+
+            <div className="bg-white rounded-[2.5rem] p-8 border border-gray-100 flex flex-col justify-between">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-black text-gray-900 uppercase text-xs tracking-widest">Instrucciones de Carga</h4>
+                    <button 
+                      onClick={downloadExcelTemplate}
+                      className="flex items-center gap-2 text-[10px] font-black text-blue-600 hover:text-blue-700 uppercase tracking-widest transition-all bg-blue-50 px-3 py-1.5 rounded-full"
+                    >
+                      <FileSpreadsheet size={14} />
+                      Bajar Plantilla
+                    </button>
+                  </div>
+                  <ul className="text-sm text-gray-500 space-y-2 font-medium">
+                     <li className="flex gap-2"><div className="size-2 bg-blue-500 rounded-full mt-1.5 shrink-0" /> Asegúrate que el Excel tenga los encabezados: Tipo Documento, Documento, Nombres, Apellidos, Correo, Curso, Año.</li>
+                     <li className="flex gap-2"><div className="size-2 bg-blue-500 rounded-full mt-1.5 shrink-0" /> El archivo no debe superar los 5MB para una sincronización óptima.</li>
+                  </ul>
+               </div>
+               <button 
+                 onClick={handleDBUpload}
+                 disabled={!dbFile || isProcessing}
+                 className="w-full py-6 mt-8 bg-blue-600 text-white rounded-[1.8rem] font-black text-sm uppercase tracking-[0.2em] shadow-xl shadow-blue-100 disabled:opacity-30 transition-all flex items-center justify-center gap-3"
+               >
+                 {isProcessing ? <Loader2 className="animate-spin" /> : 'Sincronizar Estudiantes'}
+               </button>
+            </div>
           </div>
         </div>
-      )}
-
-      {/* PDF Results */}
-      {pdfStatus && (
-        <div className="bg-white rounded-[2.5rem] border border-gray-100 overflow-hidden shadow-2xl animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <div className="bg-gray-900 p-6 md:p-8 text-white">
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 bg-orange-500 rounded-full flex items-center justify-center font-black text-xl shrink-0">
-                 PDF
-              </div>
-              <div>
-                <h5 className="text-lg md:text-xl font-black tracking-tight">Reporte de Certificados</h5>
-                <p className="text-orange-300 text-[10px] md:text-xs font-bold uppercase tracking-widest">{pdfStatus.processed} Archivos procesados</p>
-              </div>
+      ) : (
+        <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
+          <div className="bg-white p-8 md:p-12 rounded-[3rem] border border-gray-100 shadow-sm flex flex-col md:flex-row items-center gap-8">
+            <div className="size-20 bg-orange-50 rounded-3xl flex items-center justify-center text-orange-600 shrink-0">
+              <UploadCloud size={40} />
+            </div>
+            <div>
+              <h2 className="text-3xl font-black text-gray-900 leading-tight">Carga Masiva de Certificados</h2>
+              <p className="text-gray-500 font-medium mt-2">Sube los archivos PDF de los certificados. El sistema los vinculará automáticamente a cada graduado.</p>
             </div>
           </div>
 
-          <div className="p-6 md:p-8 space-y-6">
-            {pdfStatus.errors.length > 0 && (
-              <div className="space-y-4">
-                <div className="flex items-center gap-2 text-red-600">
-                  <AlertCircle size={18} />
-                  <h6 className="font-black uppercase tracking-widest text-[10px]">Errores:</h6>
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+             <div className="xl:col-span-1 space-y-4">
+                <div {...getRootPDF()} className={`h-80 rounded-[2.5rem] border-4 border-dashed transition-all cursor-pointer flex flex-col items-center justify-center p-8 text-center ${isDragPDF ? 'border-orange-500 bg-orange-50' : 'border-gray-200 bg-white hover:bg-gray-50'}`}>
+                  <input {...getInputPDF()} />
+                  <UploadCloud size={48} className="text-orange-500 mb-4" />
+                  <p className="font-black text-gray-900 uppercase text-xs tracking-widest">Suelte los PDFs aquí</p>
                 </div>
-                <div className="bg-red-50 p-4 rounded-xl border border-red-100 max-h-40 overflow-y-auto">
-                   <ul className="list-disc pl-4 space-y-1">
-                     {pdfStatus.errors.map((error, i) => (
-                       <li key={i} className="text-xs text-red-800 font-medium">{error}</li>
-                     ))}
-                   </ul>
+                <button 
+                  onClick={uploadPDFFiles}
+                  disabled={isProcessing || pdfFiles.filter(f => f.status === 'pending').length === 0}
+                  className="w-full py-6 bg-black text-white rounded-[1.8rem] font-black text-xs uppercase tracking-widest shadow-2xl disabled:opacity-30 flex items-center justify-center gap-3"
+                >
+                  {isProcessing ? <Loader2 className="animate-spin" /> : 'Subir Archivos a Drive'}
+                </button>
+             </div>
+
+             <div className="xl:col-span-2 bg-white rounded-[2.5rem] border border-gray-100 shadow-sm overflow-hidden flex flex-col h-[450px]">
+                <div className="p-5 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
+                   <h3 className="text-[10px] font-black text-gray-400 tracking-widest uppercase">Archivos en cola ({pdfFiles.length})</h3>
+                   <button onClick={() => setPdfFiles([])} className="text-red-500 font-black text-[10px] uppercase">Borrar Lista</button>
                 </div>
-              </div>
-            )}
-             {pdfStatus && pdfStatus.errors.length === 0 && (
-                <div className="text-center text-green-600 font-bold p-4 bg-green-50 rounded-xl">
-                   ¡Certificados subidos y vinculados exitosamente!
+                <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                   {pdfFiles.length === 0 ? (
+                      <div className="h-full flex items-center justify-center text-gray-300 font-bold uppercase text-[10px]">Pila de carga vacía</div>
+                   ) : (
+                      pdfFiles.map((f, i) => (
+                        <div key={i} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                           <div className="flex items-center gap-3 overflow-hidden">
+                              <FileText className="text-gray-400 shrink-0" size={18} />
+                              <span className="text-xs font-black text-gray-900 truncate">{f.file.name}</span>
+                              {f.status === 'success' && <CheckCircle2 className="text-green-500 shrink-0" size={16} />}
+                              {f.status === 'error' && <XCircle className="text-red-500 shrink-0" size={16} />}
+                           </div>
+                           {f.status === 'uploading' && <Loader2 className="animate-spin text-blue-500" size={16} />}
+                        </div>
+                      ))
+                   )}
                 </div>
-             )}
+             </div>
           </div>
         </div>
       )}

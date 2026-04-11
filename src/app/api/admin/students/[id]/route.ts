@@ -1,56 +1,37 @@
-import { db } from '@/lib/db';
-import { students } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { updateStudentInSheets, deleteStudentInSheets } from '@/lib/google-api';
 
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    // Await params as per Next.js 15+ requirements
     const { id } = await params;
     const body = await req.json();
     
-    // Validar ID
-    const studentId = Number(id);
-    if (isNaN(studentId)) {
-      return NextResponse.json({ error: 'ID inválido' }, { status: 400 });
-    }
+    await updateStudentInSheets(Number(id), {
+      documentType: body.documentType, 
+      cedula: body.cedula,
+      firstName: body.firstName,
+      lastName: body.lastName,
+      email: body.email || null,
+      courseName: body.courseName,
+      graduationYear: body.graduationYear,
+      oldCedula: body.oldCedula,
+      oldCourseName: body.oldCourseName
+    });
 
-    const updatedStudent = await db.update(students)
-      .set({
-        cedula: body.cedula,
-        documentType: body.documentType, 
-        firstName: body.firstName,
-        lastName: body.lastName,
-        // email can be updated if provided
-        ...(body.email && { email: body.email }),
-      })
-      .where(eq(students.id, studentId))
-      .returning();
-
-    if (updatedStudent.length === 0) {
-      return NextResponse.json({ error: 'Estudiante no encontrado' }, { status: 404 });
-    }
-
-    return NextResponse.json(updatedStudent[0]);
-  } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: 'Error al actualizar' }, { status: 500 });
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    console.error('Error updating in Sheets:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    const studentId = Number(id);
-    if (isNaN(studentId)) {
-      return NextResponse.json({ error: 'ID inválido' }, { status: 400 });
-    }
-
-    await db.delete(students).where(eq(students.id, studentId));
-
+    await deleteStudentInSheets(Number(id));
     return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: 'Error al eliminar' }, { status: 500 });
+  } catch (error: any) {
+    console.error('Error deleting in Sheets:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

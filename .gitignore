@@ -44,3 +44,29 @@ next-env.d.ts
 local.db
 public/certificates/
 public/template.xlsx
+
+
+# IDEs y Editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Sistema Operativo
+Thumbs.db
+.DS_Store
+
+# Drizzle (tu ORM)
+drizzle/
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Logs adicionales
+*.log
+
+# Backups y temporales
+*.bak
+*.tmp
+*.temp

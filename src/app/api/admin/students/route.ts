@@ -1,71 +1,68 @@
-import { db } from '@/lib/db';
-import { students, certificates } from '@/lib/db/schema';
-import { desc, like, or, and, eq, inArray, sql } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { listAllStudents, createStudentInSheets } from '@/lib/google-api';
+import { Student, Certificate } from '@/types';
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const search = searchParams.get('search') || '';
-  const course = searchParams.get('course') || '';
-  const year = searchParams.get('year') || '';
-  const status = searchParams.get('status') || ''; // 'pending' | 'completed' | 'all' (default)
+  const status = searchParams.get('status') || ''; 
 
   try {
-    const conditions = [];
+    const rawData = await listAllStudents();
+    
+    // Agrupación por Cédula
+    const groupedMap = new Map<string, Student>();
 
-    // Basic Search
+    for (const record of rawData) {
+      const cedKey = String(record.cedula);
+      if (!groupedMap.has(cedKey)) {
+        groupedMap.set(cedKey, {
+          ...record,
+          cedula: cedKey,
+          certificates: []
+        });
+      }
+
+      const student = groupedMap.get(cedKey)!;
+      
+      student.certificates?.push({
+        id: record.id,
+        courseName: record.courseName || 'Sin Nombre',
+        graduationYear: record.graduationYear || 0,
+        certificatePath: record.certificatePath || '#',
+        createdAt: record.createdAt
+      });
+    }
+
+    let data = Array.from(groupedMap.values());
+
     if (search) {
-      const cleanSearch = search.replace(/[^a-zA-Z0-9]/g, ''); 
-      // Normalize search term: remove accents and lowercase
-      const normalizedSearch = search.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-
-      // SQLite/LibSQL doesn't verify accents by default. We use a SQL replace chain to normalize DB columns.
-      // This is verbose but the most compatible way without extensions.
-      const normalizeCol = (col: any) => 
-        sql`lower(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(${col}, 'á', 'a'), 'é', 'e'), 'í', 'i'), 'ó', 'o'), 'ú', 'u'), 'Á', 'a'), 'É', 'e'), 'Í', 'i'), 'Ó', 'o'), 'Ú', 'u'))`;
-
-      conditions.push(or(
-        like(students.cedula, `%${search}%`),
-        like(students.cedula, `%${cleanSearch}%`),
-        // Use custom normalized comparison
-        sql`${normalizeCol(students.firstName)} LIKE ${`%${normalizedSearch}%`}`,
-        sql`${normalizeCol(students.lastName)} LIKE ${`%${normalizedSearch}%`}`
-      ));
+      const s = search.toLowerCase();
+      data = data.filter(st => {
+        const cedula = String(st.cedula).toLowerCase();
+        const firstName = String(st.firstName || '').toLowerCase();
+        const lastName = String(st.lastName || '').toLowerCase();
+        const fullName = `${firstName} ${lastName}`;
+        return (
+          cedula.includes(s) ||
+          firstName.includes(s) ||
+          lastName.includes(s) ||
+          fullName.includes(s) ||
+          st.certificates?.some(c => String(c.courseName).toLowerCase().includes(s))
+        );
+      });
     }
 
-    // Filter by Course or Year (requires join logic via subquery)
-    if (course || year || status) {
-       const certConditions = [];
-       if (course) certConditions.push(like(certificates.courseName, `%${course}%`));
-       if (year) certConditions.push(eq(certificates.graduationYear, parseInt(year)));
-       
-       if (status === 'pending') {
-          certConditions.push(or(eq(certificates.certificatePath, '#'), sql`${certificates.certificatePath} IS NULL`));
-       } else if (status === 'completed') {
-          // Check if path is NOT the placeholder '#'
-          certConditions.push(sql`${certificates.certificatePath} != '#'`); 
-       }
-
-       if (certConditions.length > 0) {
-          const subQuery = db.select({ studentId: certificates.studentId })
-                             .from(certificates)
-                             .where(and(...certConditions));
-          conditions.push(inArray(students.id, subQuery));
-       }
+    if (status === 'pending') {
+      data = data.filter(st => st.certificates?.some(c => c.certificatePath === '#'));
+    } else if (status === 'completed') {
+      data = data.filter(st => st.certificates?.every(c => c.certificatePath !== '#'));
     }
-
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-
-    const data = await db.query.students.findMany({
-      where: whereClause,
-      with: { certificates: true },
-      orderBy: [desc(students.createdAt)],
-      limit: 50, 
-    });
 
     return NextResponse.json(data);
   } catch (error) {
-    return NextResponse.json({ error: 'Error al obtener estudiantes' }, { status: 500 });
+    console.error('Error in Admin Students GET:', error);
+    return NextResponse.json({ error: 'Error al obtener datos' }, { status: 500 });
   }
 }
 
@@ -73,22 +70,41 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     
-    // Validate required fields (removed graduationYear)
-    if (!body.cedula || !body.firstName || !body.lastName) {
+    if (!body.cedula || !body.firstName || !body.courseName) {
       return NextResponse.json({ error: 'Faltan campos requeridos' }, { status: 400 });
     }
 
-    const newStudent = await db.insert(students).values({
-      cedula: body.cedula,
+    await createStudentInSheets({
       documentType: body.documentType || 'CC',
+      cedula: body.cedula,
       firstName: body.firstName,
       lastName: body.lastName,
       email: body.email || null,
-    }).returning();
+      courseName: body.courseName,
+      graduationYear: body.graduationYear
+    });
 
-    return NextResponse.json(newStudent[0]);
-  } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: 'Error al crear estudiante. Verifique que la cédula no exista.' }, { status: 400 });
+    return NextResponse.json({ success: true, message: 'Registro creado correctamente' });
+  } catch (error: any) {
+    console.error('Error in Admin Students POST:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const cedula = searchParams.get('cedula');
+
+  if (!cedula) {
+    return NextResponse.json({ error: 'Cédula requerida' }, { status: 400 });
+  }
+
+  try {
+    const { deleteStudentByCedula } = await import('@/lib/google-api');
+    await deleteStudentByCedula(cedula);
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    console.error('Error deleting student:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
