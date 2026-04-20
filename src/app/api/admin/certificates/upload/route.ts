@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
 import { uploadToDriveAndSheet } from '@/lib/google-api';
 
-// No necesitas llamarlo callSheetsAPI directo si exportas algo,
-// pero agregaremos una para el batch direct si quieres, o podemos importar custom.
-// Por simplicidad, importaremos lo necesario para hacer el request directo.
+
 const URL = process.env.GOOGLE_APPS_SCRIPT_URL;
 const TOKEN = process.env.GOOGLE_APPS_SCRIPT_TOKEN?.replace(/['"]/g, '').trim();
 
