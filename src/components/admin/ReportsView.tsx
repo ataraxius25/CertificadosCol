@@ -8,11 +8,10 @@ interface ReportsViewProps {
   students: Student[];
   isLoading: boolean;
   lastSync: Date | null;
-  activeTab?: string;
   refreshData: (force?: boolean) => Promise<void>;
 }
 
-export function ReportsView({ students, isLoading, lastSync, activeTab, refreshData }: ReportsViewProps) {
+export function ReportsView({ students, isLoading, lastSync, refreshData }: ReportsViewProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const { toast } = useToast();
 

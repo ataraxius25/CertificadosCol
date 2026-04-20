@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { listAllStudents, createStudentInSheets } from '@/lib/google-api';
-import { Student, Certificate } from '@/types';
+import { Student } from '@/types';
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);

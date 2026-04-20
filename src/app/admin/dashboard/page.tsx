@@ -75,7 +75,6 @@ export default function AdminDashboard() {
               students={students} 
               isLoading={isLoading}
               lastSync={lastSync}
-              activeTab={activeTab} 
               refreshData={fetchMasterData}
             />
           </div>

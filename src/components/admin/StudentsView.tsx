@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   Search, 
   Plus, 
@@ -52,7 +52,6 @@ export function StudentsView({ students, isLoading, lastSync, refreshData }: Stu
   const [deletingCedula, setDeletingCedula] = useState<string | null>(null);
   const [deletingCertId, setDeletingCertId] = useState<number | null>(null);
   const [addingCourse, setAddingCourse] = useState(false);
-  const formRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   const { confirmDialog } = useConfirm();
   
@@ -222,7 +221,7 @@ export function StudentsView({ students, isLoading, lastSync, refreshData }: Stu
     finally { setIsSaving(false); }
   };
 
-  const handleFileUpload = async (rowId: number, file: File, studentCedula: string) => {
+  const handleFileUpload = async (rowId: number, file: File) => {
     if (!file) return;
     setUploadingFor(rowId);
     
@@ -395,7 +394,7 @@ export function StudentsView({ students, isLoading, lastSync, refreshData }: Stu
                            <div className="flex items-center gap-3 w-full md:w-auto">
                               <input type="file" id={inputId} hidden accept=".pdf" onChange={e => {
                                 const file = e.target.files?.[0];
-                                if (file) handleFileUpload(cert.id, file, String(selectedStudent.cedula));
+                                if (file) handleFileUpload(cert.id, file);
                               }} />
                               
                                {cert.certificatePath === '#' ? (

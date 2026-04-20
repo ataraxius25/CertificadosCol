@@ -27,7 +27,7 @@ export function Sidebar({ activeTab, setActiveTab, isMobileMenuOpen, setIsMobile
         router.push('/admin');
         router.refresh();
       }
-    } catch (error) {
+    } catch {
       toast('Error al cerrar sesión', 'error');
     }
   };

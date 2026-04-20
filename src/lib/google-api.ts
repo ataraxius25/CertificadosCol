@@ -44,7 +44,7 @@ async function callSheetsAPI(method: 'GET' | 'POST', payload: any, customConfig?
     let data;
     try {
       data = JSON.parse(text);
-    } catch (e) {
+    } catch {
       console.error('[GoogleAPI] Fallo al parsear JSON. Respuesta original:', text.substring(0, 200));
       throw new Error(`Error de respuesta no-JSON: ${text.substring(0, 100)}`);
     }

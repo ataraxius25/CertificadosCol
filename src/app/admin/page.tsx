@@ -36,7 +36,7 @@ export default function AdminLogin() {
       } else {
         setError('Credenciales inválidas. Por favor intente de nuevo.');
       }
-    } catch (err) {
+    } catch {
       setError('Error de conexión con el servidor.');
     } finally {
       setIsLoading(false);

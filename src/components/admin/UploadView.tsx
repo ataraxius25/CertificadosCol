@@ -6,12 +6,9 @@ import {
   CheckCircle2, 
   XCircle, 
   Loader2, 
-  ShieldCheck,
   FileUp,
-  X,
   Database,
   FileBox,
-  AlertCircle,
   FileSpreadsheet
 } from 'lucide-react';
 import { useToast } from '@/components/ui/ToastContext';
@@ -68,7 +65,7 @@ export function UploadView({ refreshData }: UploadViewProps) {
       } else {
         toast(result.error || 'Error al procesar el Excel', 'error');
       }
-    } catch (error) {
+    } catch {
       toast('Error de conexión', 'error');
     } finally {
       setIsProcessing(false);
