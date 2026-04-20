@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
+// Version: 1.0.2 - Production Ready
 import "./globals.css";
 import { ToastProvider } from '@/components/ui/ToastContext';
 import { ConfirmDialogProvider } from '@/components/ui/ConfirmDialogContext';
@@ -29,7 +30,7 @@ export const metadata: Metadata = {
     siteName: "Sistema de Certificados",
     images: [
       {
-        url: "/og-image.png", // Sugerencia para el usuario de colocar imagen real
+        url: "/og-image.png",
         width: 1200,
         height: 630,
         alt: "Sistema de Verificación de Certificados Académicos",
