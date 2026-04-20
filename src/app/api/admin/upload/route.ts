@@ -24,7 +24,7 @@ export async function POST(req: Request) {
     }
 
     let synced = 0;
-    let errors: { row: number, error: string, data: any }[] = [];
+    const errors: { row: number, error: string, data: any }[] = [];
     const recordsToSync: any[] = [];
 
     // Normalización de columnas y validación

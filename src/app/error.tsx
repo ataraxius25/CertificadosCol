@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from 'react';
+import Link from 'next/link';
 import { RefreshCcw, Home, AlertTriangle } from 'lucide-react';
 
 export default function Error({
@@ -35,13 +36,13 @@ export default function Error({
           <RefreshCcw size={20} />
           REINTENTAR
         </button>
-        <a 
+        <Link 
           href="/" 
           className="flex items-center justify-center gap-2 px-8 py-4 bg-white text-gray-900 rounded-2xl font-black transition-all hover:bg-gray-50 active:scale-95 border border-gray-100 shadow-sm"
         >
           <Home size={20} />
           VOLVER AL INICIO
-        </a>
+        </Link>
       </div>
     </div>
   );

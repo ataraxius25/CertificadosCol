@@ -11,7 +11,7 @@ export async function POST(req: Request) {
     }
 
     let processed = 0;
-    let errors: string[] = [];
+    const errors: string[] = [];
 
     for (const file of files) {
       try {
